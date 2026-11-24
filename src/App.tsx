@@ -21,6 +21,50 @@ const ALL_ARTIFACT_KEYS: ArtifactKey[] = [
   'final',
 ];
 
+function parseLocationToRoute(pathname: string): {
+  view: AppView;
+  moduleId?: ModuleId;
+} {
+  const clean = pathname.replace(/\/+$/, '') || '/';
+  if (clean === '/') return { view: 'inicio' };
+  if (clean === '/modulos') return { view: 'recorrido' };
+  if (clean === '/desafio-final') return { view: 'desafio' };
+  if (clean === '/mis-creaciones') return { view: 'creaciones' };
+  if (clean === '/recursos') return { view: 'recursos' };
+  if (clean === '/acerca') return { view: 'acerca' };
+  if (clean === '/cierre') return { view: 'cierre' };
+
+  const modMatch = clean.match(/^\/modulo\/([1-6])$/);
+  if (modMatch) {
+    return {
+      view: 'modulo',
+      moduleId: Number(modMatch[1]) as ModuleId,
+    };
+  }
+  return { view: 'inicio' };
+}
+
+function routeToPathname(view: AppView, moduleId?: ModuleId): string {
+  switch (view) {
+    case 'inicio':
+      return '/';
+    case 'recorrido':
+      return '/modulos';
+    case 'modulo':
+      return `/modulo/${moduleId ?? 1}`;
+    case 'desafio':
+      return '/desafio-final';
+    case 'creaciones':
+      return '/mis-creaciones';
+    case 'recursos':
+      return '/recursos';
+    case 'acerca':
+      return '/acerca';
+    case 'cierre':
+      return '/cierre';
+  }
+}
+
 export default function App() {
   const {
     store,
@@ -36,38 +80,78 @@ export default function App() {
     createdArtifactsCount,
   } = useHuellaStorage();
 
-  const [activeView, setActiveView] = useState<AppView>(() =>
-    store.lastActiveView || 'inicio'
-  );
-  const [activeModuleId, setActiveModuleId] = useState<ModuleId>(() =>
-    store.lastActiveModule || 1
+  const resolveGuardedRoute = (
+    view: AppView,
+    moduleId?: ModuleId
+  ): { view: AppView; moduleId?: ModuleId; redirected: boolean } => {
+    if (view === 'modulo') {
+      const targetMod = moduleId ?? 1;
+      if (!isModuleUnlocked(targetMod)) {
+        return { view: 'recorrido', redirected: true };
+      }
+      return { view: 'modulo', moduleId: targetMod, redirected: false };
+    }
+    if (view === 'desafio' && !isFinalChallengeUnlocked) {
+      return { view: 'recorrido', redirected: true };
+    }
+    if (view === 'cierre' && !store.finalChallenge.completed) {
+      return { view: 'recorrido', redirected: true };
+    }
+    return { view, moduleId, redirected: false };
+  };
+
+  const initialResolved = (() => {
+    const parsed = parseLocationToRoute(window.location.pathname);
+    return resolveGuardedRoute(parsed.view, parsed.moduleId);
+  })();
+
+  const [activeView, setActiveView] = useState<AppView>(initialResolved.view);
+  const [activeModuleId, setActiveModuleId] = useState<ModuleId>(
+    initialResolved.moduleId ?? store.lastActiveModule ?? 1
   );
   const [printTarget, setPrintTarget] = useState<'all' | ArtifactKey>('all');
 
+  useEffect(() => {
+    const targetPath = routeToPathname(activeView, activeModuleId);
+    if (window.location.pathname !== targetPath && initialResolved.redirected) {
+      window.history.replaceState(null, '', targetPath);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const parsed = parseLocationToRoute(window.location.pathname);
+      const resolved = resolveGuardedRoute(parsed.view, parsed.moduleId);
+      setActiveView(resolved.view);
+      if (resolved.moduleId) setActiveModuleId(resolved.moduleId);
+      setNavigationState(resolved.view, resolved.moduleId);
+      if (resolved.redirected) {
+        window.history.replaceState(
+          null,
+          '',
+          routeToPathname(resolved.view, resolved.moduleId)
+        );
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isModuleUnlocked, isFinalChallengeUnlocked, store.finalChallenge.completed]);
+
   const navigate = (view: AppView, moduleId?: ModuleId) => {
-    // Protección de desbloqueo secuencial en navegación directa
-    if (view === 'modulo' && moduleId && !isModuleUnlocked(moduleId)) {
-      setActiveView('recorrido');
-      setNavigationState('recorrido');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    if (view === 'desafio' && !isFinalChallengeUnlocked) {
-      setActiveView('recorrido');
-      setNavigationState('recorrido');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    if (view === 'cierre' && !store.finalChallenge.completed) {
-      setActiveView('recorrido');
-      setNavigationState('recorrido');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
+    const resolved = resolveGuardedRoute(view, moduleId);
+    const targetPath = routeToPathname(resolved.view, resolved.moduleId);
+
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState(null, '', targetPath);
     }
 
-    setActiveView(view);
-    if (moduleId) setActiveModuleId(moduleId);
-    setNavigationState(view, moduleId);
+    setActiveView(resolved.view);
+    if (resolved.moduleId) setActiveModuleId(resolved.moduleId);
+    setNavigationState(resolved.view, resolved.moduleId);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
